@@ -10,6 +10,7 @@ import { addAudiohookSampleRoute } from './audiohook-sample-endpoint';
 import { addAudiohookLoadTestRoute } from './audiohook-load-test-endpoint';
 import { addAudiohookVoiceTranscriptionRoute } from './audiohook-vt-endpoint';
 import { addBrowserAudioRoute } from './browser-audio-endpoint';
+import { addActiveConnectionsRoute } from './active-connections-endpoints';
 
 dotenv.config();
 
@@ -42,9 +43,18 @@ server.register(async (fastify: FastifyInstance) => {
     addAudiohookSampleRoute(fastify, '/api/v1/audiohook/ws');
     addAudiohookVoiceTranscriptionRoute(fastify, '/api/v1/voicetranscription/ws');
     addAudiohookLoadTestRoute(fastify, '/api/v1/loadtest/ws');
+    
     addBrowserAudioRoute(fastify, '/api/v1/browser/audio');
+    addActiveConnectionsRoute(fastify, '/api/v1/active-connections/ws');
+    addHealthCheckRoute(fastify, '/api/v1/health');
+    
 });
 
+export const addHealthCheckRoute = (fastify: FastifyInstance, path: string): void => {
+    fastify.get(path, async (request, reply) => {
+        return { status: 'ok' };
+    });
+}
 
 server.register(dynamodbPlugin);
 server.register(secretsPlugin);

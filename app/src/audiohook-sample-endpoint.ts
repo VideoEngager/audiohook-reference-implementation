@@ -7,6 +7,7 @@ import { isUuid, httpsignature as httpsig, ServerSession, createServerSession, M
 import { addAgentAssist } from './agentassist-hack';
 import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
 import { broadcastAudioToBrowsers, broadcastSessionEventToBrowsers } from './browser-audio-endpoint';
+import { addOrUpdateActiveSession, removeActiveSession } from './active-connections-endpoints';
 
 dotenv.config();
 
@@ -143,6 +144,13 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
                 conversationId: openParams.conversationId,
                 participant: openParams.participant
             });
+
+            // Add to active sessions monitor
+            addOrUpdateActiveSession(sessionId, {
+                organizationId: openParams.organizationId,
+                conversationId: openParams.conversationId,
+                participants: [openParams.participant]
+            });
         });
 
         // Broadcast audio data to browser clients
@@ -157,6 +165,9 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
 
         session.addCloseHandler(async () => {
             broadcastSessionEventToBrowsers(sessionId, 'session-closed');
+            
+            // Remove from active sessions monitor
+            removeActiveSession(sessionId);
         });
     });
 };

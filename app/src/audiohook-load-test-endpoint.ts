@@ -8,6 +8,7 @@ import {
 } from '../audiohook';
 import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
 import { createTestStatusDataItem } from './datamodel-teststatus';
+import { addOrUpdateActiveSession, removeActiveSession } from './active-connections-endpoints';
 
 const timeProvider = defaultTimeProvider;
 
@@ -46,6 +47,16 @@ export const addAudiohookLoadTestRoute = (fastify: FastifyInstance, path: string
         session.addOpenHandler(async ({ openParams }) => {
             const conversationId = openParams.conversationId;
             const participantId = openParams.participant.id;
+            
+            // Add to active sessions monitor
+            if(!isNullUuid(conversationId) && !isNullUuid(participantId)) {
+                addOrUpdateActiveSession(sessionId, {
+                    organizationId: orgId,
+                    conversationId,
+                    participants: [openParams.participant]
+                });
+            }
+            
             if(isNullUuid(conversationId) || isNullUuid(participantId)) {
                 // Connection probes are not saved to DynamoDB
                 return;
@@ -85,6 +96,9 @@ export const addAudiohookLoadTestRoute = (fastify: FastifyInstance, path: string
 
         session.addFiniHandler(() => {
             fastify.log.info({ session: sessionId }, `Statistics: ${ws.loggableSummary()}`);
+            
+            // Remove from active sessions monitor
+            removeActiveSession(sessionId);
         });
     });
 };

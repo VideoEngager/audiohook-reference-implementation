@@ -5,6 +5,7 @@ import { createAudioHookSession } from './create-audiohook-session';
 import { initiateRequestAuthentication } from './authenticator';
 import { isNullUuid } from '../audiohook';
 import { createTestStatusDataItem } from './datamodel-teststatus';
+import { addOrUpdateActiveSession, removeActiveSession } from './active-connections-endpoints';
 
 dotenv.config();
 
@@ -44,6 +45,16 @@ export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, pa
         session.addOpenHandler(async ({ openParams }) => {
             const conversationId = openParams.conversationId;
             const participantId = openParams.participant.id;
+            
+            // Add to active sessions monitor
+            if(!isNullUuid(conversationId) && !isNullUuid(participantId)) {
+                addOrUpdateActiveSession(sessionId, {
+                    organizationId,
+                    conversationId,
+                    participants: [openParams.participant]
+                });
+            }
+            
             if(isNullUuid(conversationId) || isNullUuid(participantId)) {
                 // Connection probes are not saved to DynamoDB
                 return;
@@ -71,6 +82,7 @@ export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, pa
             };
         });
 
+
         const lifecycleToken = fastify.lifecycle.registerSession(() => {
             session.logger.info('Service shutdown announced, trigger reconnect');
         });
@@ -82,6 +94,9 @@ export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, pa
 
         session.addFiniHandler(() => {
             fastify.log.info({ session: sessionId }, `Statistics: ${ws.loggableSummary()}`);
+            
+            // Remove from active sessions monitor
+            removeActiveSession(sessionId);
         });
     });
 };
