@@ -1,88 +1,159 @@
-import { FastifyInstance } from 'fastify';
 import dotenv from 'dotenv';
-import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
-import { createAudioHookSession } from './create-audiohook-session';
-import { initiateRequestAuthentication } from './authenticator';
-import { isNullUuid } from '../audiohook';
-import { createTestStatusDataItem } from './datamodel-teststatus';
+import {
+    DynamoDBClient,
+    PutItemCommand,
+    AttributeValue,
+} from '@aws-sdk/client-dynamodb';
+import {
+    UpdateableItems,
+    PrimaryKey,
+    GSI1Key,
+    GSI2Key,
+    TypedAttributeValue,
+    makeUpdateItemCommand,
+} from './dynamodb-utils';
+import {
+    StreamDuration,
+    Uuid,
+    Duration,
+    OpenParameters,
+    JsonObject,
+} from '../audiohook';
 
 dotenv.config();
 
-export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, path: string): void => {
 
-    const fileLogRoot = process.env['LOG_ROOT_DIR'] || process.cwd();
+const dataTableName = process.env['DYNAMODB_TABLE_NAME'] ?? null;
 
-    fastify.log.info(`LocalLogRootDir: ${fileLogRoot}`);
+const dataItemsTtl = 24*3600;  // Expire items after a day
 
-    fastify.get<{
-        Querystring: {
-            session?: string;
-        },
-        Headers: {
-            'audiohook-session-id'?: string;
-            'audiohook-organization-id'?: string;
-            'audiohook-correlation-id'?: string;
-            'x-api-key'?: string;
-            'signature'?: string;
-            'signature-input'?: string;
-        }
-    }>(path, {
-        websocket: true
-    }, (connection, request) => {
+const makeTtlAttributeValue = (now?: Date): AttributeValue.NMember => {
+    return {
+        N: Math.ceil((now?.getTime() ?? Date.now())/1000 + dataItemsTtl).toFixed(0)
+    };
+};
 
-        request.log.info(`Websocket Request - URI: <${request.url}>, SocketRemoteAddr: ${request.socket.remoteAddress}, Headers: ${JSON.stringify(request.headers, null, 1)}`);
 
-        const ws = new SessionWebsocketStatsTracker(connection.socket);
+//
+// teststatus
+// ----------
+//
+// PK: SESSION#{sessionId}
+// SK: TESTSTATUS
+// type: <string: "teststatus">
+// createdAt: <string: ISO6801>
+// orgId: <string: orgId>
+// sessionId: <string: sessionId>
+// correlationId: <string: correlationId>
+// position: <string: Duration>
+// state: <string>
+// openParams: <string: JSON>
+// result?: <string: JSON>
+// ttl: <number>
+// GSI1PK: CORR#{correlationId}
+// GSI1SK: SESSION#{sessionId}
 
-        const { session, sessionId, organizationId, correlationId } = createAudioHookSession({ request, connection, ws });
+type TestStatusItemKey = PrimaryKey<`SESSION#${Uuid}`, 'TYPE#teststatus'>;
+type TestStatusItemGSI1Key = GSI1Key<`CORRELATION#${Uuid}`, `TS#${string}`>;
+type TestStatusItemGSI2Key = GSI2Key<`ORGID#${Uuid}`, `TS#${string}`>;
+type TestStatusItemData = {
+    readonly createdAt: TypedAttributeValue<string>,
+    readonly type: TypedAttributeValue<string>,
+    readonly orgId: TypedAttributeValue<Uuid>,
+    readonly sessionId: TypedAttributeValue<Uuid>,
+    readonly correlationId: TypedAttributeValue<Uuid>,
+    position: TypedAttributeValue<Duration>,
+    state: TypedAttributeValue<string>,
+    openParams: TypedAttributeValue<string>,
+    result?: TypedAttributeValue<string>,
+    ttl: TypedAttributeValue<number>,
+};
 
-        if(!(request.authenticated ?? false)) {
-            // Request has not yet been authenticated, attach authenticator(s) to verify request signature.
-            initiateRequestAuthentication({ session, request });
-        }
+type TestStatusItem = TestStatusItemKey & TestStatusItemGSI1Key & TestStatusItemGSI2Key & TestStatusItemData;
 
-        session.addOpenHandler(async ({ openParams }) => {
-            const conversationId = openParams.conversationId;
-            const participantId = openParams.participant.id;
-            if(isNullUuid(conversationId) || isNullUuid(participantId)) {
-                // Connection probes are not saved to DynamoDB
-                return;
-            }
-            const testStatus = await createTestStatusDataItem(request.server.dynamodb, {
-                sessionId,
-                orgId: organizationId,
-                correlationId,
-                conversationId,
-                position: session.position,
-                openParams
-            });
-            if(!testStatus) {
-                return;
-            }
 
-            return async (session, closeParams) => {
-                return async () => {
-                    const result = {
-                        reason: closeParams?.reason ?? 'unknown',
-                        statistics: ws.jsonSummary()
-                    };
-                    await testStatus.finalize(session.position, 'finalized', result);
-                };
-            };
+export interface TestStatusDataItem {
+    updateStatus(position: StreamDuration, state: string): Promise<void>;
+    finalize(position: StreamDuration, state: string, result: JsonObject): Promise<void>;
+}
+
+
+class TestStatusDataItemImpl implements TestStatusDataItem {
+    constructor(
+        private readonly client: DynamoDBClient,
+        private readonly table: string,
+        private readonly key: TestStatusItemKey
+    ) {
+    }
+
+    static async create(client: DynamoDBClient, table: string, params: CreateTestStatusItemParams): Promise<TestStatusDataItem> {
+        const now = new Date(Date.now());
+        const timestamp = now.toISOString().substring(0, 23);
+        const key: TestStatusItemKey = {
+            PK: { S: `SESSION#${params.sessionId}` },
+            SK: { S: 'TYPE#teststatus' },
+        };
+        const item: TestStatusItem = {
+            ...key,
+            createdAt: { S: timestamp },
+            type: { S: 'teststatus' },
+            orgId: { S: params.orgId },
+            sessionId: { S: params.sessionId },
+            correlationId: { S: params.correlationId },
+            position: { S: params.position.asDuration() },
+            state: { S: 'open' },
+            openParams: { S: JSON.stringify(params.openParams) },
+            ttl: makeTtlAttributeValue(now),
+            GSI1PK: { S: `CORRELATION#${params.conversationId}` },
+            GSI1SK: { S: `TS#${timestamp}` },
+            GSI2PK: { S: `ORGID#${params.orgId}` },
+            GSI2SK: { S: `TS#${timestamp}` },
+        };
+
+        const putCommand = new PutItemCommand({
+            TableName: table,
+            Item: item,
+            ConditionExpression: 'attribute_not_exists(PK)'
         });
 
+        await client.send(putCommand);
+        return new TestStatusDataItemImpl(client, table, key);
+    }
 
-        const lifecycleToken = fastify.lifecycle.registerSession(() => {
-            session.logger.info('Service shutdown announced, trigger reconnect');
-        });
-        session.addFiniHandler(() => {
-            lifecycleToken.unregister();
-        });
+    async _updateAux(position: StreamDuration, state: string, items?: UpdateableItems<TestStatusItem>): Promise<void> {
+        const updates: UpdateableItems<TestStatusItem> = {
+            state: { S: state },
+            position: { S: position.asDuration() },
+            ttl: makeTtlAttributeValue(),
+            ...items
+        };
+        const updateCommand = makeUpdateItemCommand(this.table, this.key, updates);
+        await this.client.send(updateCommand);
+    }
 
-        session.addOpenHandler(ws.createTrackingHandler());
+    async updateStatus(position: StreamDuration, state: string): Promise<void> {
+        await this._updateAux(position, state);
+    }
 
-        session.addFiniHandler(() => {
-            fastify.log.info({ session: sessionId }, `Statistics: ${ws.loggableSummary()}`);
+    async finalize(position: StreamDuration, state: string, result: JsonObject): Promise<void> {
+        await this._updateAux(position, state, {
+            result: { S: JSON.stringify(result) }
         });
-    });
+    }
+}
+
+export type CreateTestStatusItemParams = {
+    orgId: string;
+    sessionId: string;
+    correlationId: string;
+    conversationId: string;
+    openParams: OpenParameters;
+    position: StreamDuration;
+};
+
+export const createTestStatusDataItem = async (client: DynamoDBClient, params: CreateTestStatusItemParams): Promise<TestStatusDataItem|null> => {
+    if(!dataTableName) {
+        return null;
+    }
+    return TestStatusDataItemImpl.create(client, dataTableName, params);
 };
