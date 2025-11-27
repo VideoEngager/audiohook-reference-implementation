@@ -3,7 +3,6 @@ import dotenv from 'dotenv';
 import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
 import { createAudioHookSession } from './create-audiohook-session';
 import { initiateRequestAuthentication } from './authenticator';
-import { SimulatedTranscripts, VTSupportedLanguages } from './sim-transcribe/simulated-transcripts';
 import { isNullUuid } from '../audiohook';
 import { createTestStatusDataItem } from './datamodel-teststatus';
 
@@ -35,7 +34,7 @@ export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, pa
 
         const ws = new SessionWebsocketStatsTracker(connection.socket);
 
-        const { session, sessionId, organizationId, correlationId } = createAudioHookSession({ request, connection, ws, supportedLanguages: VTSupportedLanguages });
+        const { session, sessionId, organizationId, correlationId } = createAudioHookSession({ request, connection, ws });
 
         if(!(request.authenticated ?? false)) {
             // Request has not yet been authenticated, attach authenticator(s) to verify request signature.
@@ -71,8 +70,6 @@ export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, pa
                 };
             };
         });
-
-        const simulatedTranscripts = new SimulatedTranscripts(session);
 
         const lifecycleToken = fastify.lifecycle.registerSession(() => {
             session.logger.info('Service shutdown announced, trigger reconnect');

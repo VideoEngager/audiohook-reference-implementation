@@ -21,5 +21,10 @@
         "curly": ["error", "all"],
         "object-curly-spacing": ["error", "always"],
         "semi": ["error", "always"]
-    }
+    },
+    "ignorePatterns": [
+        "build/",
+        "node_modules/",
+        "test/**"
+    ]
 }

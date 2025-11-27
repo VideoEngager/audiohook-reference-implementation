@@ -124,7 +124,9 @@ class MediaSourceWav extends EventEmitter implements MediaSource {
         };
 
         const handler = () => {
-            if(this.state=='PAUSED') return;
+            if(this.state=='PAUSED') {
+                return;
+            }
             const read = Math.max(0, Math.min(samplesPerFrame, this.sampleEndPos-this.samplePos));
             this.reader.readNext(read)
                 .then(data => {
@@ -187,7 +189,7 @@ class MediaSourceWav extends EventEmitter implements MediaSource {
     resume(): void {
         if(this.state === 'PAUSED') {
             this.state = 'STREAMING';
-            let tmp = this.samplePos - this.pauseStartPos;
+            const tmp = this.samplePos - this.pauseStartPos;
             this.samplePos = this.pauseStartPos;
             this.emit('resumed', this.position, StreamDuration.fromSamples(tmp, this.sampleRate));
         } else if(this.state === 'STREAMING') {

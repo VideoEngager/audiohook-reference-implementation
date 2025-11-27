@@ -22,7 +22,8 @@
     "exactOptionalPropertyTypes": false,
     "strictPropertyInitialization": true,
     "typeRoots": ["./node_modules/@types"],
-    "outDir": "./build"
+    "outDir": "./build",
+    "skipLibCheck": true
   },
   "exclude": [
     "app/**",

@@ -1,4 +1,4 @@
-ARG NODE_VERSION=16
+ARG NODE_VERSION=22
 
 # First, build the project
 FROM node:${NODE_VERSION} AS builder
@@ -14,8 +14,7 @@ COPY [\
     "/buildarea/"\
 ]
 
-RUN npm ci
-
+RUN npm install
 COPY "./src" "/buildarea/src/"
 COPY "./audiohook" "/buildarea/audiohook/"
 
