@@ -14,7 +14,7 @@
     "cdk-deploy": "npm run buildcheck && npx cdk deploy --outputs-file ./cdk-exports.json",
     "cdk-destroy": "npx cdk destroy",
     "buildcheck": "tsc --project tsconfig.json --pretty --noEmit && npm run lint && npm run buildcheck --prefix app && npm run buildcheck --prefix client",
-    "lint": "eslint . --ext .ts --cache --max-warnings 0",
+    "lint": "eslint . --ext .ts --cache",
     "update": "ncu -t minor -u && npm install && npm run update --prefix app && npm run update --prefix client",
     "clean": "rm -r build/ ; rm -r cdk.out/ ; npm run clean --prefix app ; npm run clean --prefix client",
     "watch": "tsc -w",

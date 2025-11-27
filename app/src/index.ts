@@ -54,7 +54,7 @@ export const addHealthCheckRoute = (fastify: FastifyInstance, path: string): voi
     fastify.get(path, async (request, reply) => {
         return { status: 'ok' };
     });
-}
+};
 
 server.register(dynamodbPlugin);
 server.register(secretsPlugin);
