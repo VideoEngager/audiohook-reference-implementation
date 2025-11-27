@@ -3,9 +3,10 @@ import { S3Client } from '@aws-sdk/client-s3';
 import dotenv from 'dotenv';
 import { RecordedSession, RecordingBucket } from './recordedsession';
 import { initiateRequestAuthentication, verifyRequestSignature } from './authenticator';
-import { isUuid, httpsignature as httpsig, ServerSession, createServerSession } from '../audiohook';
+import { isUuid, httpsignature as httpsig, ServerSession, createServerSession, MediaDataFrame } from '../audiohook';
 import { addAgentAssist } from './agentassist-hack';
 import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
+import { broadcastAudioToBrowsers, broadcastSessionEventToBrowsers } from './browser-audio-endpoint';
 
 dotenv.config();
 
@@ -23,11 +24,12 @@ type AuthStrategy = 'request' | 'session';
 export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string): void => {
 
     const fileLogRoot = process.env['LOG_ROOT_DIR'] ?? process.cwd();
+    console.log(`Log root dir: ${fileLogRoot}`);
     const recordingS3Bucket = process.env['RECORDING_S3_BUCKET'] ?? null;
 
     fastify.log.info(`LocalLogRootDir: ${fileLogRoot}`);
     fastify.log.info(`Recording S3 bucket: ${recordingS3Bucket ?? '<none>'}`);
-    
+
     const recordingBucket: RecordingBucket | null = recordingS3Bucket ? {
         service: new S3Client({}),
         name: recordingS3Bucket
@@ -37,8 +39,8 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
     // request - Verify signature in GET request that establishes WebSocket
     // session - Use authenticator handler attached to session after WebSocket is open
     const authStrategy: AuthStrategy = (process.env['SESSION_AUTH_STRATEGY'] === 'request') ? 'request' : 'session';
-    
-    fastify.get<{      
+
+    fastify.get<{
         Headers: {
             'audiohook-session-id'?: string;
             'audiohook-organization-id'?: string;
@@ -51,9 +53,9 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
         websocket: true,
         onRequest: async (request, reply): Promise<unknown> => {
             request.authenticated = false;
-            if(authStrategy === 'request') {
+            if (authStrategy === 'request') {
                 const result = await verifyRequestSignature({ request });
-                if(result.code !== 'VERIFIED') {
+                if (result.code !== 'VERIFIED') {
                     // Verification failed
                     request.log.info(`Signature verification failure: ${JSON.stringify(result)}`);
                     reply.code(401);
@@ -63,28 +65,30 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
             }
             return;
         },
-        
+
     }, (connection, request) => {
 
         request.log.info(`Websocket Request - URI: <${request.url}>, SocketRemoteAddr: ${request.socket.remoteAddress}, Headers: ${JSON.stringify(request.headers, null, 1)}`);
 
         const sessionId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-session-id');
-        if(!sessionId || !isUuid(sessionId)) {
+        if (!sessionId || !isUuid(sessionId)) {
             throw new RangeError('Missing or invalid "audiohook-session-id" header field');
         }
-        if(isDev && (connection.socket.binaryType !== 'nodebuffer')) {
+        if (isDev && (connection.socket.binaryType !== 'nodebuffer')) {
             throw new Error(`WebSocket binary type '${connection.socket.binaryType}' not supported`);
         }
 
         const logLevel = isDev ? 'debug' : 'info';
 
         const logger = request.log.child({ session: sessionId }, { level: logLevel });
-        
+
         // Create a proxy for the WebSocket that tracks statistics
         const ws = new SessionWebsocketStatsTracker(connection.socket);
 
         let session: ServerSession;
-        if(recordingBucket) {
+        // Always create a recorded session (WAV + JSON files)
+        // If S3 bucket is configured, files will be uploaded; otherwise they stay local
+        if (recordingBucket) {
             // We have an S3 bucket. Create a session whose audio is recorded into a WAV file and protocol
             // and log messages are written to a sidecar JSON file, then uploaded to S3.
             const recorder = RecordedSession.create({
@@ -107,8 +111,9 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
                 logger
             });
         }
-        
-        if(!(request.authenticated ?? false)) {
+
+
+        if (!(request.authenticated ?? false)) {
             // Request has not yet been authenticated, attach authenticator(s) to verify request signature.
             initiateRequestAuthentication({ session, request });
         }
@@ -129,6 +134,29 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
         session.addOpenHandler(ws.createTrackingHandler());
         session.addFiniHandler(() => {
             fastify.log.info({ session: sessionId }, `Session statistics - ${ws.loggableSummary()}`);
+        });
+
+        // Broadcast session events to browser clients
+        session.addOpenHandler(async ({ openParams }) => {
+            broadcastSessionEventToBrowsers(sessionId, 'session-opened', {
+                organizationId: openParams.organizationId,
+                conversationId: openParams.conversationId,
+                participant: openParams.participant
+            });
+        });
+
+        // Broadcast audio data to browser clients
+        session.on('audio', function (frame: MediaDataFrame) {
+            // Broadcast each channel separately
+            frame.channels.forEach((channel) => {
+                const channelView = frame.getChannelView(channel);
+                const buffer = Buffer.from(channelView.data.buffer, channelView.data.byteOffset, channelView.data.byteLength);
+                broadcastAudioToBrowsers(sessionId, buffer, channel);
+            });
+        });
+
+        session.addCloseHandler(async () => {
+            broadcastSessionEventToBrowsers(sessionId, 'session-closed');
         });
     });
 };

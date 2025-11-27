@@ -9,6 +9,7 @@ import secretsPlugin from './secrets-plugin';
 import { addAudiohookSampleRoute } from './audiohook-sample-endpoint';
 import { addAudiohookLoadTestRoute } from './audiohook-load-test-endpoint';
 import { addAudiohookVoiceTranscriptionRoute } from './audiohook-vt-endpoint';
+import { addBrowserAudioRoute } from './browser-audio-endpoint';
 
 dotenv.config();
 
@@ -41,7 +42,7 @@ server.register(async (fastify: FastifyInstance) => {
     addAudiohookSampleRoute(fastify, '/api/v1/audiohook/ws');
     addAudiohookVoiceTranscriptionRoute(fastify, '/api/v1/voicetranscription/ws');
     addAudiohookLoadTestRoute(fastify, '/api/v1/loadtest/ws');
-
+    addBrowserAudioRoute(fastify, '/api/v1/browser/audio');
 });
 
 
